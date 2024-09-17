@@ -1,0 +1,16 @@
+{
+    "name": "Ciart.AdvancedTilemap.Editor",
+    "rootNamespace": "Ciart.AdvancedTilemap",
+    "references": [
+        "Ciart.AdvancedTilemap"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

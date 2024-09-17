@@ -1245,7 +1245,7 @@ MonoBehaviour:
     m_SkipHidden: 0
     m_SearchArea: 1
     m_Folders:
-    - Assets/MaximovInk/AdvancedTilemap/Demo/Scenes
+    - Assets/Ciart/AdvancedTilemap/Demo/Scenes
     m_Globs: []
     m_ProductIds: 
     m_AnyWithAssetOrigin: 0
@@ -1255,7 +1255,7 @@ MonoBehaviour:
   m_ViewMode: 1
   m_StartGridSize: 82
   m_LastFolders:
-  - Assets/MaximovInk/AdvancedTilemap/Demo/Scenes
+  - Assets/Ciart/AdvancedTilemap/Demo/Scenes
   m_LastFoldersGridSize: 82
   m_LastProjectPath: C:\Users\DRIPPY\Documents\Repos\AdvancedTilemap
   m_LockTracker:
