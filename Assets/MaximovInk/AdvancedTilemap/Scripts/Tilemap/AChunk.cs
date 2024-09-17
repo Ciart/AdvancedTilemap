@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace MaximovInk.AdvancedTilemap
@@ -6,10 +7,15 @@ namespace MaximovInk.AdvancedTilemap
     [ExecuteAlways]
     public partial class AChunk : MonoBehaviour
     {
+        public event Action GenerationJobsCompleted;
+
         public const int CHUNK_SIZE = 16;
         public ALayer Layer;
         public int GridX;
         public int GridY;
+
+        public bool IsLoaded;
+        public bool CanTrim => !IsLoaded && IsEmpty();
 
         private ChunkProcessor _chunkProcessor;
 
@@ -23,6 +29,11 @@ namespace MaximovInk.AdvancedTilemap
             UpdateRenderer();
         }
 
+        private void Start()
+        {
+            _data.IsDirty = true;
+        }
+
         public void Init()
         {
             CheckRenderer();
@@ -31,6 +42,21 @@ namespace MaximovInk.AdvancedTilemap
             ColliderEnabledChange(Layer.ColliderEnabled);
             UpdateLiquidState();
             UpdateFlags();
+        }
+
+        public void UpdateFlags()
+        {
+            if (Layer.Tilemap.DisplayChunksInHierarchy)
+            {
+                gameObject.hideFlags &= ~HideFlags.HideInHierarchy;
+            }
+            else
+            {
+                gameObject.hideFlags |= HideFlags.HideInHierarchy;
+            }
+
+            tag = Layer.Tag;
+            gameObject.layer = Layer.LayerMask;
         }
 
         private void CheckValidate()
@@ -125,6 +151,11 @@ namespace MaximovInk.AdvancedTilemap
 
 
             _data.IsDirty = false;
+
+            GenerationJobsCompleted?.Invoke();
+
+            if(!Layer.TrimIfNeeded())
+                Layer.CalculateBounds();
         }
 
         #region Collider
@@ -146,11 +177,23 @@ namespace MaximovInk.AdvancedTilemap
             {
                 _collider2D = gameObject.AddComponent<PolygonCollider2D>();
                 _data.IsDirty = true;
+                UpdateCollisionState();
             }
 
             if(!active && _collider2D != null)
             {
                 DestroyImmediate(_collider2D);
+            }
+
+        }
+
+        public void UpdateCollisionState()
+        {
+            _data.FillCollision(false);
+
+            for (int i = 0; i < _data.ArraySize; i++)
+            {
+                _data.collision[i] = IsCollision(_data.data[i]);
             }
         }
 
@@ -159,9 +202,11 @@ namespace MaximovInk.AdvancedTilemap
         public Bounds GetBounds()
         {
             Bounds bounds = meshFilter.sharedMesh ? meshFilter.sharedMesh.bounds : default;
+
+            var tileUnit = Layer.Tileset.GetTileUnit();
             if (bounds == default)
             {
-                Vector3 vMinMax = Vector2.Scale(new Vector2(GridX < 0 ? CHUNK_SIZE : 0f, GridY < 0 ? CHUNK_SIZE : 0f), Vector3.one);
+                Vector3 vMinMax = Vector2.Scale(new Vector2(GridX < 0 ? CHUNK_SIZE : 0f, GridY < 0 ? CHUNK_SIZE : 0f), tileUnit);
                 bounds.SetMinMax(vMinMax, vMinMax);
             }
             for (int i = 0; i < _data.data.Length; ++i)
@@ -175,7 +220,7 @@ namespace MaximovInk.AdvancedTilemap
                 int gy = i / CHUNK_SIZE;
                 if (GridY >= 0) gy++;
 
-                Vector2 gridPos = Vector2.Scale(new Vector2(gx, gy), Vector3.one);
+                Vector2 gridPos = Vector2.Scale(new Vector2(gx, gy), tileUnit);
 
                 bounds.Encapsulate(gridPos);
             }

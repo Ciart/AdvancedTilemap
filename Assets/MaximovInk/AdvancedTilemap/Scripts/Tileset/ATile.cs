@@ -27,8 +27,6 @@ namespace MaximovInk.AdvancedTilemap
         [SerializeField]
         private string _tileDriverID;
 
-
-
         public void SetUV(ATileUV uv,int id = 0)
         {
             Variations[id] = uv;
@@ -82,6 +80,8 @@ namespace MaximovInk.AdvancedTilemap
 
             var newMin = lastTileUV.Min + new Vector2(uvSize.x, 0);
             var newTileUV = ATileUV.Generate(newMin, newMin + uvSize);
+
+            newTileUV.TextureSize = lastTileUV.TextureSize;
 
             if (newTileUV.Max.x > 1.05f)
             {

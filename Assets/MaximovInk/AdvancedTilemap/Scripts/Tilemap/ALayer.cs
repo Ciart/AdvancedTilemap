@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace MaximovInk.AdvancedTilemap
@@ -6,6 +7,9 @@ namespace MaximovInk.AdvancedTilemap
     [ExecuteAlways]
     public class ALayer : MonoBehaviour
     {
+        public event Action OnTileChanged;
+        public event Action OnChunkCreated;
+
         public bool IsActive { get => gameObject.activeSelf; set
             {
                 if (value == gameObject.activeSelf) return;
@@ -36,10 +40,16 @@ namespace MaximovInk.AdvancedTilemap
             } }
         public bool AutoTrim { get => Tilemap.AutoTrim; }
 
+     
         public int MinGridX { get; private set; }
         public int MinGridY { get; private set; }
         public int MaxGridX { get; private set; }
         public int MaxGridY { get; private set; }
+
+        public Bounds Bounds => _bounds;
+
+        [SerializeField,HideInInspector]
+        private Bounds _bounds;
 
         public ATilemap Tilemap;
         public ATileset Tileset;
@@ -50,6 +60,7 @@ namespace MaximovInk.AdvancedTilemap
         public bool UpdateVariationsOnRefresh = true;
         public bool TrimInvoke;
         public bool ChunkCacheDirty;
+        public bool BoundsIsDirty;
 
         [SerializeField, HideInInspector] private Material _material;
         [SerializeField, HideInInspector] private bool _colliderEnabled;
@@ -65,24 +76,33 @@ namespace MaximovInk.AdvancedTilemap
 
         private float _liquidTimer = 0;
 
-        public void CalculateBounds()
+        public void CalculateBounds(bool immediate = false)
         {
+            if (!immediate)
+            {
+                BoundsIsDirty = true;
+                return;
+            }
+
+
             MinGridX = 0; MinGridY = 0; MaxGridX = 0; MaxGridY = 0;
-            Bounds bounds = new Bounds();
+            _bounds = new Bounds();
+
+            var unit = Tileset.GetTileUnit();
 
             foreach (var chunk in chunksCache)
             {
-                Bounds chunkbounds = chunk.Value.GetBounds();
-                Vector2 min = transform.InverseTransformPoint(chunk.Value.transform.TransformPoint(chunkbounds.min));
-                Vector2 max = transform.InverseTransformPoint(chunk.Value.transform.TransformPoint(chunkbounds.max));
-                bounds.Encapsulate(min + Vector2.one * 0.5f);
-                bounds.Encapsulate(max - Vector2.one * 0.5f);
+                Bounds chunkBounds = chunk.Value.GetBounds();
+                Vector2 min = transform.InverseTransformPoint(chunk.Value.transform.TransformPoint(chunkBounds.min));
+                Vector2 max = transform.InverseTransformPoint(chunk.Value.transform.TransformPoint(chunkBounds.max));
+                _bounds.Encapsulate(min + Vector2.one * unit);
+                _bounds.Encapsulate(max - Vector2.one * unit);
             }
 
-            MinGridX = Utilites.GetGridX(this, bounds.min);
-            MinGridY = Utilites.GetGridY(this, bounds.min);
-            MaxGridX = Utilites.GetGridX(this, bounds.max);
-            MaxGridY = Utilites.GetGridY(this, bounds.max);
+            MinGridX = Utilites.GetGridX(this, _bounds.min);
+            MinGridY = Utilites.GetGridY(this, _bounds.min);
+            MaxGridX = Utilites.GetGridX(this, _bounds.max);
+            MaxGridY = Utilites.GetGridY(this, _bounds.max);
         }
 
         #region Undo
@@ -155,7 +175,7 @@ namespace MaximovInk.AdvancedTilemap
             {
                 var tileChange = command.tileChanges[i];
                 if (tileChange.OldTileData == 0)
-                    EraseTile(tileChange.Position.x, tileChange.Position.y);
+                    SetTile(tileChange.Position.x, tileChange.Position.y,0);
                 else
                     SetTile(tileChange.Position.x, tileChange.Position.y, tileChange.OldTileData);
             }
@@ -181,7 +201,7 @@ namespace MaximovInk.AdvancedTilemap
                 var tileChange = command.tileChanges[i];
 
                 if(tileChange.NewTileData == 0) 
-                    EraseTile(tileChange.Position.x, tileChange.Position.y);
+                    SetTile(tileChange.Position.x, tileChange.Position.y,0);
                 else
                     SetTile(tileChange.Position.x, tileChange.Position.y, tileChange.NewTileData);
             }
@@ -195,9 +215,11 @@ namespace MaximovInk.AdvancedTilemap
 
         public void SetTile(int x, int y, ushort tileID, UVTransform data = default)
         {
-            var chunk = GetOrCreateChunk(x, y);
+            var chunk = GetOrCreateChunk(x, y, tileID != ATile.EMPTY);
 
-            var coords = ConvertCoordinatesToChunk(x, y);
+            if (chunk == null) return;
+
+            var coords = ConvertGlobalGridToChunk(x, y);
 
             if (IsUndoEnabled && currentRecording != null)
             {
@@ -228,6 +250,9 @@ namespace MaximovInk.AdvancedTilemap
             if (chunk.SetTile(coords.x, coords.y, tileID, data)) {
                 UpdateBitmask(x, y);
                 UpdateNeighborsBitmask(x, y);
+
+                if (AutoTrim && tileID == ATile.EMPTY)
+                    TrimInvoke = true;
             }
         }
 
@@ -238,54 +263,9 @@ namespace MaximovInk.AdvancedTilemap
             if (chunk == null)
                 return 0;
 
-            var coords = ConvertCoordinatesToChunk(x, y);
+            var coords = ConvertGlobalGridToChunk(x, y);
 
             return chunk.GetTile(coords.x, coords.y);
-        }
-
-        public void EraseTile(int x, int y)
-        {
-            var chunk = GetOrCreateChunk(x, y, false);
-
-            var coords = ConvertCoordinatesToChunk(x, y);
-
-            if (chunk == null) return;
-
-            if (IsUndoEnabled && currentRecording != null)
-            {
-                var oldID = chunk.GetTile(coords.x, coords.y);
-                var newID = 0;
-
-                if (oldID != newID)
-                {
-                    var match = currentRecording.tileChanges.Find(n => n != null && n.Position.x == x && n.Position.y == y);
-
-                    if (match == null)
-                    {
-                        currentRecording.tileChanges.Add(new ATilemapCommand.TileData()
-                        {
-                            Position = new Vector2Int(x, y),
-                            OldTileData = oldID,
-                            NewTileData = 0
-                        });
-                    }
-                    else
-                    {
-                        match.NewTileData = 0;
-                    }
-                }
-            }
-
-            if(chunk.EraseTile(coords.x, coords.y))
-            {
-
-                UpdateBitmask(x, y);
-                UpdateNeighborsBitmask(x, y);
-
-                if (AutoTrim)
-                    TrimInvoke = true;
-            }
-
         }
 
         public void SetColor(int x,int y ,Color32 color)
@@ -294,7 +274,7 @@ namespace MaximovInk.AdvancedTilemap
 
             if (chunk == null) return;
 
-            var coords = ConvertCoordinatesToChunk(x, y);
+            var coords = ConvertGlobalGridToChunk(x, y);
 
             chunk.SetColor(coords.x, coords.y, color);
         }
@@ -306,7 +286,7 @@ namespace MaximovInk.AdvancedTilemap
             if (chunk == null)
                 return Color.white;
 
-            var coords = ConvertCoordinatesToChunk(x, y);
+            var coords = ConvertGlobalGridToChunk(x, y);
 
             return chunk.GetColor(coords.x, coords.y);
         }
@@ -322,7 +302,7 @@ namespace MaximovInk.AdvancedTilemap
             if (chunk == null)
                 return;
 
-            var coords = ConvertCoordinatesToChunk(x, y);
+            var coords = ConvertGlobalGridToChunk(x, y);
 
             if(chunk.GetBitmask(coords.x, coords.y) != bitmask)
                 chunk.SetBitmask(coords.x, coords.y, bitmask);
@@ -334,7 +314,7 @@ namespace MaximovInk.AdvancedTilemap
 
             if (chunk == null) return 0;
 
-            var coords = ConvertCoordinatesToChunk(x, y);
+            var coords = ConvertGlobalGridToChunk(x, y);
 
             return chunk.GetBitmask(coords.x, coords.y);
         }
@@ -342,6 +322,8 @@ namespace MaximovInk.AdvancedTilemap
         public void UpdateBitmask(int x, int y)
         {
             SetBitmask(x, y, CalculateBitmask(x, y));
+
+            OnTileChanged?.Invoke();
         }
 
         public void UpdateNeighborsBitmask(int x, int y)
@@ -406,9 +388,11 @@ namespace MaximovInk.AdvancedTilemap
             {
                 chunk.Value.Refresh(immediate);
             }
+
+            CalculateBounds();
         }
 
-        private AChunk GetOrCreateChunk(int x, int y, bool autoCreate = true)
+        public AChunk GetOrCreateChunk(int x, int y, bool autoCreate = true)
         {
             int chunkX = (x < 0 ? (x + 1 - AChunk.CHUNK_SIZE) : x) / AChunk.CHUNK_SIZE;
             int chunkY = (y < 0 ? (y + 1 - AChunk.CHUNK_SIZE) : y) / AChunk.CHUNK_SIZE;
@@ -431,6 +415,8 @@ namespace MaximovInk.AdvancedTilemap
                 chunk.Init();
 
                 chunksCache[key] = chunk;
+
+                OnChunkCreated?.Invoke();
             }
 
             return chunk;
@@ -440,13 +426,22 @@ namespace MaximovInk.AdvancedTilemap
         {
             foreach (var chunk in chunksCache)
             {
-                if (chunk.Value.IsEmpty())
+                if (chunk.Value.CanTrim)
                 {
                     DestroyImmediate(chunk.Value.gameObject);
                 }
             }
             BuildChunkCache();
-            CalculateBounds();
+          
+        }
+
+        public bool TrimIfNeeded()
+        {
+            if (!AutoTrim) return false;
+
+            Trim();
+
+            return true;
         }
 
         private void BuildChunkCache()
@@ -464,6 +459,8 @@ namespace MaximovInk.AdvancedTilemap
                     chunk.UpdateRenderer();
                 }
             }
+
+            CalculateBounds();
         }
 
         public void Clear()
@@ -475,7 +472,7 @@ namespace MaximovInk.AdvancedTilemap
                 {
                     for (int iy = MinGridY; iy < MaxGridY; iy++)
                     {
-                        EraseTile(ix, iy);
+                        SetTile(ix, iy,0);
                     }
                 }
 
@@ -487,9 +484,11 @@ namespace MaximovInk.AdvancedTilemap
                 DestroyImmediate(chunk.Value.gameObject);
             }
             chunksCache.Clear();
+
+            CalculateBounds();
         }
 
-        private Vector2Int ConvertCoordinatesToChunk(int x, int y)
+        public Vector2Int ConvertGlobalGridToChunk(int x, int y)
         {
             int cx = (x < 0 ? -x - 1 : x) % AChunk.CHUNK_SIZE;
             int cy = (y < 0 ? -y - 1 : y) % AChunk.CHUNK_SIZE;
@@ -523,6 +522,11 @@ namespace MaximovInk.AdvancedTilemap
             BuildChunkCache();
         }
 
+        private void Awake()
+        {
+            BuildChunkCache();
+        }
+
         private void Update()
         {
             if (TrimInvoke)
@@ -535,6 +539,13 @@ namespace MaximovInk.AdvancedTilemap
             {
                 ChunkCacheDirty = false;
                 BuildChunkCache();
+            }
+
+            if (BoundsIsDirty)
+            {
+                BoundsIsDirty = false;
+                CalculateBounds(true);
+
             }
 
             if (Application.isPlaying)
@@ -584,8 +595,8 @@ namespace MaximovInk.AdvancedTilemap
         {
             CalculateBounds();
 
-            var min = Utilites.GetGridPosition(this,Utilites.BoundsMin(Camera.main) - new Vector2(AChunk.CHUNK_SIZE * 3, AChunk.CHUNK_SIZE * 3));
-            var max = Utilites.GetGridPosition(this,Utilites.BoundsMax(Camera.main) + new Vector2(AChunk.CHUNK_SIZE * 3, AChunk.CHUNK_SIZE * 3));
+            var min = Utilites.GetGridPosition(this,Camera.main.BoundsMin() - new Vector2(AChunk.CHUNK_SIZE * 3, AChunk.CHUNK_SIZE * 3));
+            var max = Utilites.GetGridPosition(this,Camera.main.BoundsMax() + new Vector2(AChunk.CHUNK_SIZE * 3, AChunk.CHUNK_SIZE * 3));
 
             for (int ix = min.x; ix < max.x; ix++)
             {
@@ -785,7 +796,7 @@ namespace MaximovInk.AdvancedTilemap
             var chunk = GetOrCreateChunk(x, y, false);
             if (chunk == null)
                 return false ;
-            var coords = ConvertCoordinatesToChunk(x, y);
+            var coords = ConvertGlobalGridToChunk(x, y);
             return chunk.GetSettled(coords.x, coords.y);
         }
 
@@ -794,7 +805,7 @@ namespace MaximovInk.AdvancedTilemap
             var chunk = GetOrCreateChunk(x, y, false);
             if (chunk == null)
                 return;
-            var coords = ConvertCoordinatesToChunk(x, y);
+            var coords = ConvertGlobalGridToChunk(x, y);
 
             
             chunk.SetSettled(coords.x, coords.y, value);
@@ -810,7 +821,7 @@ namespace MaximovInk.AdvancedTilemap
 
             var chunk = GetOrCreateChunk(x, y, false);
 
-            var coords = ConvertCoordinatesToChunk(x, y);
+            var coords = ConvertGlobalGridToChunk(x, y);
 
             if (chunk == null)
                 return;
@@ -831,7 +842,7 @@ namespace MaximovInk.AdvancedTilemap
             if (chunk == null)
                 return;
 
-            var coords = ConvertCoordinatesToChunk(x, y);
+            var coords = ConvertGlobalGridToChunk(x, y);
 
             chunk.AddLiquid(coords.x, coords.y, value);
         }
@@ -848,10 +859,101 @@ namespace MaximovInk.AdvancedTilemap
             if (chunk == null)
                 return 0;
 
-            var coords = ConvertCoordinatesToChunk(x, y);
+            var coords = ConvertGlobalGridToChunk(x, y);
 
             return chunk.GetLiquid(coords.x, coords.y);
         }
+
+        #endregion
+
+        #region Lighting
+
+        public void UpdateLightingState(bool active)
+        {
+            foreach (var chunk in chunksCache)
+            {
+                chunk.Value.UpdateLightingState(active);
+            }
+        }
+
+        public void SetLight(int x, int y, byte value)
+        {
+            var chunk = GetOrCreateChunk(x, y, false);
+
+            var coords = ConvertGlobalGridToChunk(x, y);
+
+            if (chunk == null)
+                return;
+
+            chunk.SetLight(coords.x, coords.y, value);
+        }
+
+        public byte GetLight(int x, int y)
+        {
+            var chunk = GetOrCreateChunk(x, y, false);
+
+            if (chunk == null)
+                return 0;
+
+            var coords = ConvertGlobalGridToChunk(x, y);
+
+            return chunk.GetLight(coords.x, coords.y);
+        }
+
+        #endregion
+
+        #region Gizmos
+
+        /*
+        private void OnDrawGizmos()
+        {
+            DrawGizmos();
+        }
+
+        public void DrawGizmos()
+        {
+           // Debug.Log($"{Tilemap != null}&& {Tilemap.ShowGrid}");
+
+            if (Tilemap != null && Tilemap.ShowGrid)
+            {
+                var camTransform = Camera.current.transform;
+                var layerTransform = transform;
+
+                var tilemapPlane = new Plane(layerTransform.forward, layerTransform.position);
+
+                var rayCamToPlane = new Ray(camTransform.position, camTransform.forward);
+                tilemapPlane.Raycast(rayCamToPlane, out var distCamToTilemap);
+
+                Debug.Log(HandleUtility.GetHandleSize(rayCamToPlane.GetPoint(distCamToTilemap)) <= 3f);
+
+                if (HandleUtility.GetHandleSize(rayCamToPlane.GetPoint(distCamToTilemap)) <= 3f)
+                {
+                    Gizmos.color = GlobalSettings.TilemapGridColor;
+
+                    for (float i = 1; i < AChunk.CHUNK_SIZE; i++)
+                    {
+                        Gizmos.DrawLine(
+                            this.transform.TransformPoint(new Vector3(Bounds.min.x + i * 1f, Bounds.min.y)),
+                            this.transform.TransformPoint(new Vector3(Bounds.min.x + i * 1f, Bounds.max.y))
+                        );
+                    }
+
+                    // Vertical lines
+                    for (float i = 1; i < AChunk.CHUNK_SIZE; i++)
+                    {
+                        Gizmos.DrawLine(
+                            this.transform.TransformPoint(new Vector3(Bounds.min.x, Bounds.min.y + i * 1f, 0)),
+                            this.transform.TransformPoint(new Vector3(Bounds.max.x, Bounds.min.y + i * 1f, 0))
+                        );
+                    }
+
+                    Gizmos.color = Color.white;
+                }
+
+
+            }
+        }
+*/
 
         #endregion
     }
